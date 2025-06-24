@@ -14,8 +14,7 @@
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
-    
-    <script src="https://apis.google.com/js/api.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-storage.js"></script>
 
     <script type="module">
         // IMPORTANT: Replace with your Firebase project's configuration.
@@ -27,21 +26,11 @@
             messagingSenderId: "662076306120",
             appId: "1:662076306120:web:aeff50c81bf7fca4dcabfd"
         };
-        
-        // --- NEW: GOOGLE DRIVE API CONFIGURATION ---
-        // IMPORTANT: Replace with your Google Cloud project's credentials.
-        const googleApiConfig = {
-            apiKey: "AIzaSyA_LwyfcrkkrRwvgoy5OS-iHO7_RKm-f-4", // Replace with your API Key
-            clientId: "132677234470-u84cu7fvd3ettgt7926hr2pk49qclpm8.apps.googleusercontent.com", // Replace with your Client ID
-            scope: "https://www.googleapis.com/auth/drive.file",
-            discoveryDocs: ["https://www.googleapis.com/discovery/v1/apis/drive/v3/rest"],
-        };
-
 
         const app = firebase.initializeApp(firebaseConfig);
         window.db = app.firestore();
         window.auth = app.auth();
-        window.googleApiConfig = googleApiConfig; // Make config globally available
+        window.storage = app.storage();
     </script>
 
     <style>
@@ -49,6 +38,7 @@
         body { font-family: 'Inter', sans-serif; background-color: #f7f8fc; }
         .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.7); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 1rem; }
         .modal-content { background: white; padding: 2rem; border-radius: 0.75rem; max-height: 90vh; overflow-y: auto; width: 90%; max-width: 600px; position: relative; }
+        /* Adding a subtle transition for input focus */
         input:focus, select:focus {
             box-shadow: 0 0 0 2px #c7d2fe;
             border-color: #818cf8;
@@ -61,72 +51,13 @@
     <script type="text/babel">
         const { useState, useEffect, createContext, useContext, useCallback, useMemo } = React;
 
-        // --- 1. AUTHENTICATION CONTEXT (Now includes Google Auth) ---
+        // --- 1. AUTHENTICATION CONTEXT ---
         const AuthContext = createContext();
         const AuthProvider = ({ children }) => {
             const [user, setUser] = useState(null);
             const [isAdmin, setIsAdmin] = useState(false);
             const [userData, setUserData] = useState(null);
             const [loading, setLoading] = useState(true);
-
-            // --- NEW: Google Drive Auth State ---
-            const [isGoogleSignedIn, setGoogleSignedIn] = useState(false);
-            const [gapiLoaded, setGapiLoaded] = useState(false);
-
-            // --- NEW: Load GAPI client ---
-            useEffect(() => {
-                gapi.load('client:auth2', () => {
-                    gapi.client.init(googleApiConfig).then(() => {
-                        setGapiLoaded(true);
-                        const authInstance = gapi.auth2.getAuthInstance();
-                        setGoogleSignedIn(authInstance.isSignedIn.get());
-                        authInstance.isSignedIn.listen(setGoogleSignedIn);
-                    }).catch(err => console.error("Error initializing GAPI client", err));
-                });
-            }, []);
-            
-            // --- NEW: Google Sign-in/Sign-out functions ---
-            const signInWithGoogle = () => gapi.auth2.getAuthInstance().signIn();
-            const signOutFromGoogle = () => gapi.auth2.getAuthInstance().signOut();
-
-            // --- NEW: Google Drive upload function ---
-            const uploadFileToDrive = async (file) => {
-                if (!isGoogleSignedIn) {
-                    throw new Error("Please sign in with Google to upload files.");
-                }
-
-                const metadata = {
-                    name: `${Date.now()}_${file.name}`,
-                    mimeType: file.type,
-                };
-                
-                const form = new FormData();
-                form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-                form.append('file', file);
-
-                const res = await gapi.client.request({
-                    path: 'https://www.googleapis.com/upload/drive/v3/files',
-                    method: 'POST',
-                    params: { uploadType: 'multipart' },
-                    body: form,
-                });
-                
-                if (res.status !== 200) {
-                     throw new Error('File upload failed.');
-                }
-                
-                const fileId = res.result.id;
-
-                // Make the file publicly readable
-                await gapi.client.drive.permissions.create({
-                    fileId: fileId,
-                    resource: { role: 'reader', type: 'anyone' }
-                });
-
-                // Return a direct-use link for <img> tags
-                return `https://drive.google.com/uc?id=${fileId}`;
-            };
-
 
             useEffect(() => {
                 const unsubscribe = auth.onAuthStateChanged(async (firebaseUser) => {
@@ -150,28 +81,26 @@
                 return () => unsubscribe();
             }, []);
 
-            const contextValue = { 
-                user, userData, isAdmin, loading, 
-                isGoogleSignedIn, gapiLoaded, signInWithGoogle, signOutFromGoogle,
-                uploadFileToDrive
-            };
-
-            return <AuthContext.Provider value={contextValue}>{!loading && children}</AuthContext.Provider>;
+            return <AuthContext.Provider value={{ user, userData, isAdmin, loading }}>{!loading && children}</AuthContext.Provider>;
         };
         const useAuth = () => useContext(AuthContext);
 
+        // --- 2. MAIN APP COMPONENT (ROUTER) ---
         function App() {
             const { user, isAdmin } = useAuth();
             if (!user) return <AuthScreen />;
             return isAdmin ? <AdminDashboard /> : <UserDashboard />;
         }
         
-        const Navbar = ({ children }) => {
-             const { user, userData } = useAuth();
+        // --- 3. SHARED COMPONENTS ---
+        const Navbar = () => {
+            const { user, userData } = useAuth();
+
             return (
                 <nav className="bg-white shadow-sm border-b border-gray-200">
                     <div className="container mx-auto px-6 py-4 flex justify-between items-center">
                         <h1 className="text-3xl font-extrabold text-indigo-600">BidPlatform</h1>
+                        
                         {user && (
                             <div className="flex items-center space-x-4">
                                 <span className="text-gray-700 font-medium">
@@ -200,13 +129,15 @@
             </div></div>
         );
 
+        // --- HELPER FUNCTION TO FORMAT DATES ---
         const formatDate = (firebaseTimestamp) => {
             if (!firebaseTimestamp?.toDate) return 'Invalid Date';
             const date = firebaseTimestamp.toDate();
             const options = { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true };
             return new Intl.DateTimeFormat('en-GB', options).format(date).replace(/,/g, '');
         };
-
+        
+        // --- 4. AUTHENTICATION & REGISTRATION ---
         function AuthScreen() {
             const [activeTab, setActiveTab] = useState('user');
             const [isRegister, setIsRegister] = useState(false);
@@ -233,7 +164,7 @@
                                     ? "Create a New Account"
                                     : `${activeTab.charAt(0).toUpperCase() + activeTab.slice(1)} Login`}
                             </h2>
-                            {isRegister ? <RegisterForm /> : <LoginForm activeTab={activeTab} />}
+                            {isRegister ? <RegisterForm onLoginLinkClick={() => setIsRegister(false)}/> : <LoginForm activeTab={activeTab} />}
                             {activeTab === 'user' && (
                                 <div className="text-center mt-6">
                                     <a
@@ -261,9 +192,11 @@
             </svg>
         );
 
+
         const LoginForm = ({ activeTab }) => {
             const [email, setEmail] = useState('');
             const [password, setPassword] = useState('');
+            // --- NEW: State for password visibility ---
             const [showPassword, setShowPassword] = useState(false);
             const [error, setError] = useState('');
 
@@ -283,6 +216,7 @@
             return ( 
                 <form onSubmit={handleLogin} className="space-y-6">
                     <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email Address" required className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none transition" />
+                    {/* --- NEW: Password input with visibility toggle --- */}
                     <div className="relative">
                         <input 
                             type={showPassword ? "text" : "password"} 
@@ -306,35 +240,15 @@
                 </form> 
             );
         };
-        
+
         function RegisterForm() {
             const [formData, setFormData] = useState({ firstName: '', lastName: '', mobile: '', dob: '', gender: 'male', email: '', password: '', confirmPassword: '' });
-            const [profileImageUrl, setProfileImageUrl] = useState('');
-            const [imageUploadError, setImageUploadError] = useState('');
+            const [profilePicFile, setProfilePicFile] = useState(null);
             const [errors, setErrors] = useState({});
             const [loading, setLoading] = useState(false);
+            // --- NEW: State for password visibility ---
             const [showPassword, setShowPassword] = useState(false);
             const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-            const { isGoogleSignedIn, gapiLoaded, signInWithGoogle, uploadFileToDrive } = useAuth();
-            
-            const handleFileChangeAndUpload = async (e) => {
-                const file = e.target.files[0];
-                if (!file) return;
-                if (!isGoogleSignedIn) {
-                    setImageUploadError("Please sign in with Google first to upload an image.");
-                    return;
-                }
-                setLoading(true);
-                setImageUploadError('');
-                try {
-                    const url = await uploadFileToDrive(file);
-                    setProfileImageUrl(url);
-                } catch (error) {
-                    setImageUploadError(error.message || "Failed to upload image. Please try again.");
-                } finally {
-                    setLoading(false);
-                }
-            };
 
             const handleChange = e => {
                 setFormData({...formData, [e.target.name]: e.target.value});
@@ -342,66 +256,145 @@
                     setErrors(prevErrors => ({ ...prevErrors, [e.target.name]: null }));
                 }
             };
-            
+
+            const handleFileChange = e => {
+                if (e.target.files[0]) {
+                    setProfilePicFile(e.target.files[0]);
+                }
+            };
+
+            const validateForm = () => {
+                const newErrors = {};
+                if (!formData.firstName.trim()) newErrors.firstName = 'First name is required.';
+                if (!formData.lastName.trim()) newErrors.lastName = 'Last name is required.';
+                const mobileRegex = /^[6-9]\d{9}$/;
+                if (!formData.mobile) newErrors.mobile = 'Mobile number is required.';
+                else if (!mobileRegex.test(formData.mobile)) newErrors.mobile = 'Please enter a valid 10-digit mobile number.';
+                if (!formData.dob) {
+                    newErrors.dob = 'Date of birth is required.';
+                } else {
+                    const today = new Date();
+                    const birthDate = new Date(formData.dob);
+                    let age = today.getFullYear() - birthDate.getFullYear();
+                    const monthDifference = today.getMonth() - birthDate.getMonth();
+                    if (monthDifference < 0 || (monthDifference === 0 && today.getDate() < birthDate.getDate())) {
+                        age--;
+                    }
+                    if (age < 18) newErrors.dob = 'You must be at least 18 years old.';
+                }
+                const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+                if (!formData.email) newErrors.email = 'Email is required.';
+                else if (!emailRegex.test(formData.email)) newErrors.email = 'Please enter a valid email address.';
+                if (!formData.password) {
+                    newErrors.password = 'Password is required.';
+                } else if (formData.password.length < 8) {
+                    newErrors.password = 'Password must be at least 8 characters long.';
+                }
+                if (formData.password !== formData.confirmPassword) {
+                    newErrors.confirmPassword = 'Passwords do not match.';
+                }
+                return newErrors;
+            };
+
             const handleRegister = async (e) => {
                 e.preventDefault();
+                setErrors({});
+                const validationErrors = validateForm();
+                if (Object.keys(validationErrors).length > 0) {
+                    setErrors(validationErrors);
+                    return;
+                }
                 setLoading(true);
                 try {
+                    let profileImageUrl = '';
+                    if (profilePicFile) {
+                        const storageRef = storage.ref(`profile-pics/${Date.now()}_${profilePicFile.name}`);
+                        const snapshot = await storageRef.put(profilePicFile);
+                        profileImageUrl = await snapshot.ref.getDownloadURL();
+                    }
                     const userCred = await auth.createUserWithEmailAndPassword(formData.email, formData.password);
                     const userDataToSave = { ...formData, profileImageUrl, isAdmin: false, createdAt: new Date() };
                     delete userDataToSave.password;
                     delete userDataToSave.confirmPassword;
                     await db.collection('users').doc(userCred.user.uid).set(userDataToSave);
                 } catch (err) {
-                    setErrors({form: err.message});
+                    if (err.code === 'auth/email-already-in-use') {
+                        setErrors({ email: 'This email is already registered.' });
+                    } else {
+                        setErrors({ form: err.message });
+                    }
                 } finally {
                     setLoading(false);
                 }
             };
+            
+            const inputClass = (field) => `w-full p-3 border rounded-lg transition ${errors[field] ? 'border-red-500 bg-red-50' : 'border-gray-300'}`;
 
             return (
                 <form onSubmit={handleRegister} className="space-y-4">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <input name="firstName" value={formData.firstName} onChange={handleChange} placeholder="First Name" required className="w-full p-3 border rounded-lg transition border-gray-300" />
-                        <input name="lastName" value={formData.lastName} onChange={handleChange} placeholder="Last Name" required className="w-full p-3 border rounded-lg transition border-gray-300" />
+                        <div>
+                            <input name="firstName" value={formData.firstName} onChange={handleChange} placeholder="First Name" required className={inputClass('firstName')} />
+                            {errors.firstName && <p className="text-red-500 text-xs mt-1">{errors.firstName}</p>}
+                        </div>
+                        <div>
+                            <input name="lastName" value={formData.lastName} onChange={handleChange} placeholder="Last Name" required className={inputClass('lastName')} />
+                            {errors.lastName && <p className="text-red-500 text-xs mt-1">{errors.lastName}</p>}
+                        </div>
                     </div>
+
                     <div>
-                         <label className="block text-sm font-medium text-gray-700">Profile Picture</label>
-                        {!isGoogleSignedIn && gapiLoaded && (
-                             <button type="button" onClick={signInWithGoogle} className="mt-1 w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700">
-                                Sign in with Google to Upload
-                            </button>
-                        )}
-                        {imageUploadError && <p className="text-red-500 text-xs mt-1">{imageUploadError}</p>}
-                        
-                        {isGoogleSignedIn && (
-                            <div className="mt-2 flex items-center space-x-4">
-                               {profileImageUrl ? (
-                                    <img src={profileImageUrl} className="h-16 w-16 rounded-full object-cover" alt="Profile"/>
-                               ) : (
-                                    <span className="h-16 w-16 rounded-full overflow-hidden bg-gray-100 flex items-center justify-center">
-                                       <svg className="h-12 w-12 text-gray-300" fill="currentColor" viewBox="0 0 24 24"><path d="M24 20.993V24H0v-2.996A14.977 14.977 0 0112.004 15c4.904 0 9.26 2.354 11.996 5.993zM16.002 8.999a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
-                                    </span>
-                               )}
-                               <label htmlFor="profile-pic-upload" className="cursor-pointer bg-white py-2 px-3 border border-gray-300 rounded-md shadow-sm text-sm leading-4 font-medium text-gray-700 hover:bg-gray-50">
-                                   <span>{loading ? 'Uploading...' : 'Change'}</span>
-                                   <input id="profile-pic-upload" type="file" onChange={handleFileChangeAndUpload} accept="image/*" className="sr-only" disabled={loading || !isGoogleSignedIn}/>
-                               </label>
-                            </div>
-                        )}
+                        <input type="tel" name="mobile" value={formData.mobile} onChange={handleChange} placeholder="Mobile Number" required className={inputClass('mobile')} />
+                        {errors.mobile && <p className="text-red-500 text-xs mt-1">{errors.mobile}</p>}
                     </div>
-                    <div className="relative">
-                        <input type={showPassword ? "text" : "password"} name="password" value={formData.password} onChange={handleChange} placeholder="Password" required className="w-full p-3 border rounded-lg transition border-gray-300" />
-                        <button type="button" onClick={()=>setShowPassword(!showPassword)} className="absolute inset-y-0 right-0 px-3 flex items-center group"><EyeIcon isVisible={showPassword}/></button>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <input type="date" name="dob" value={formData.dob} onChange={handleChange} required className={inputClass('dob')} title="Date of Birth" />
+                            {errors.dob && <p className="text-red-500 text-xs mt-1">{errors.dob}</p>}
+                        </div>
+                        <select name="gender" value={formData.gender} onChange={handleChange} className="w-full p-3 border rounded-lg border-gray-300 bg-white">
+                            <option value="male">Male</option>
+                            <option value="female">Female</option>
+                            <option value="other">Other</option>
+                        </select>
                     </div>
+
+                    <div>
+                        <input type="email" name="email" value={formData.email} onChange={handleChange} placeholder="Email Address" required className={inputClass('email')} />
+                        {errors.email && <p className="text-red-500 text-xs mt-1">{errors.email}</p>}
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        {/* --- NEW: Password input with visibility toggle --- */}
+                        <div className="relative">
+                           <input type={showPassword ? "text" : "password"} name="password" value={formData.password} onChange={handleChange} placeholder="Password" required className={inputClass('password')} />
+                           {errors.password && <p className="text-red-500 text-xs mt-1">{errors.password}</p>}
+                           <button type="button" onClick={()=>setShowPassword(!showPassword)} className="absolute inset-y-0 right-0 px-3 flex items-center group"><EyeIcon isVisible={showPassword}/></button>
+                        </div>
+                        {/* --- NEW: Confirm Password input with visibility toggle --- */}
+                         <div className="relative">
+                           <input type={showConfirmPassword ? "text" : "password"} name="confirmPassword" value={formData.confirmPassword} onChange={handleChange} placeholder="Confirm Password" required className={inputClass('confirmPassword')} />
+                           {errors.confirmPassword && <p className="text-red-500 text-xs mt-1">{errors.confirmPassword}</p>}
+                           <button type="button" onClick={()=>setShowConfirmPassword(!showConfirmPassword)} className="absolute inset-y-0 right-0 px-3 flex items-center group"><EyeIcon isVisible={showConfirmPassword}/></button>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700">Profile Picture (Optional)</label>
+                        <input type="file" onChange={handleFileChange} accept="image/*" className="w-full text-sm mt-1 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100" />
+                    </div>
+
+                    {errors.form && <p className="text-red-500 text-sm text-center font-medium">{errors.form}</p>}
+                    
                     <button type="submit" disabled={loading} className="w-full py-3 bg-green-600 text-white font-bold rounded-lg hover:bg-green-700 transition-all duration-300 transform hover:scale-105 disabled:bg-gray-400 disabled:scale-100">
-                        {loading ? 'Processing...' : 'Register'}
+                        {loading ? 'Registering...' : 'Register'}
                     </button>
-                    {errors.form && <p className="text-red-500 text-sm mt-2">{errors.form}</p>}
                 </form>
             );
         }
 
+        // --- 5. USER DASHBOARD & COMPONENTS ---
         function UserDashboard() {
             const [view, setView] = useState('list');
             const [selectedAuctionId, setSelectedAuctionId] = useState(null);
@@ -413,6 +406,7 @@
             const [activeTab, setActiveTab] = useState('live');
             const [allAuctions, setAllAuctions] = useState([]);
             useEffect(() => { const unsub = db.collection('auctions').orderBy('startTime', 'desc').onSnapshot(snap => setAllAuctions(snap.docs.map(d => ({id: d.id, ...d.data()})))); return () => unsub(); }, []);
+            
             const filteredAuctions = useMemo(() => {
                 const now = new Date();
                 if (activeTab === 'live') return allAuctions.filter(a => a.startTime?.toDate() <= now && a.endTime?.toDate() > now);
@@ -420,12 +414,17 @@
                 if (activeTab === 'expired') return allAuctions.filter(a => a.endTime?.toDate() <= now);
                 return [];
             }, [activeTab, allAuctions]);
+
             return (
                 <div>
                     <div className="border-b border-gray-200 mb-6">
                         <nav className="-mb-px flex space-x-8">
                             {['live', 'upcoming', 'expired'].map(tab => (
-                                <button key={tab} onClick={() => setActiveTab(tab)} className={`py-4 px-1 border-b-2 font-medium text-lg transition-colors ${activeTab === tab ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}>
+                                <button
+                                    key={tab}
+                                    onClick={() => setActiveTab(tab)}
+                                    className={`py-4 px-1 border-b-2 font-medium text-lg transition-colors ${activeTab === tab ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}
+                                >
                                     {tab.charAt(0).toUpperCase() + tab.slice(1)}
                                 </button>
                             ))}
@@ -433,7 +432,11 @@
                     </div>
                     {filteredAuctions.length === 0 ? (
                         <div className="text-center text-gray-500 mt-20">
+                            <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                                <path vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h12a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2z" />
+                            </svg>
                             <h3 className="mt-2 text-sm font-medium text-gray-900">No auctions</h3>
+                            <p className="mt-1 text-sm text-gray-500">There are currently no auctions in this category.</p>
                         </div>
                     ) : (
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
@@ -444,110 +447,309 @@
             );
         }
 
+        const AuctionCardTimer = ({ startTime, endTime }) => {
+            const [displayTime, setDisplayTime] = useState({ text: 'Loading...', color: 'text-gray-500' });
+            const calculateTime = useCallback(() => {
+                const now = new Date();
+                const start = startTime?.toDate();
+                const end = endTime?.toDate();
+                if (!start || !end) return; 
+
+                if (now < start) {
+                    const diff = start - now;
+                    const d = Math.floor(diff / (1000 * 60 * 60 * 24));
+                    const h = String(Math.floor((diff / 36e5) % 24)).padStart(2, '0');
+                    const m = String(Math.floor((diff % 36e5) / 6e4)).padStart(2, '0');
+                    const s = String(Math.floor((diff % 6e4) / 1000)).padStart(2, '0');
+                    const text = d > 0 ? `Starts in: ${d}d ${h}:${m}` : `Starts in: ${h}:${m}:${s}`;
+                    setDisplayTime({ text: text, color: 'text-blue-600 font-bold' });
+                } else if (now >= start && now < end) {
+                    const diff = end - now;
+                    const d = Math.floor(diff / (1000 * 60 * 60 * 24));
+                    const h = String(Math.floor((diff / 36e5) % 24)).padStart(2, '0');
+                    const m = String(Math.floor((diff % 36e5) / 6e4)).padStart(2, '0');
+                    const s = String(Math.floor((diff % 6e4) / 1000)).padStart(2, '0');
+                     const text = d > 0 ? `Ends in: ${d}d ${h}:${m}` : `Time Left: ${h}:${m}:${s}`;
+                    setDisplayTime({ text: text, color: 'text-green-600 font-bold' });
+                } else {
+                    setDisplayTime({ text: 'Auction Closed', color: 'text-red-600 font-bold' });
+                }
+            }, [startTime, endTime]);
+
+            useEffect(() => {
+                calculateTime();
+                const end = endTime?.toDate();
+                if (end && new Date() < end) {
+                    const interval = setInterval(calculateTime, 1000);
+                    return () => clearInterval(interval);
+                }
+            }, [calculateTime, endTime]);
+            
+            return <p className={`text-center text-lg ${displayTime.color}`}>{displayTime.text}</p>;
+        };
+
         const AuctionCard = ({ auction, onSelect }) => (
             <div onClick={() => onSelect(auction.id)} className="bg-white rounded-xl shadow-lg overflow-hidden cursor-pointer transition-all duration-300 hover:shadow-2xl hover:-translate-y-2 flex flex-col group">
                 <div className="overflow-hidden">
                     <img className="w-full h-56 object-cover transition-transform duration-500 group-hover:scale-110" src={auction.imageUrls?.[0] || "https://placehold.co/600x400/e2e8f0/4a5568?text=Item"} alt={auction.title} />
                 </div>
+                <div className="p-5 flex flex-col flex-grow">
+                    <h3 className="text-xl font-bold text-gray-800 mb-2 truncate">{auction.title}</h3>
+                    <p className="text-lg font-bold text-indigo-600 mb-4">
+                        Current Bid: ₹{parseFloat(auction.currentPrice || auction.minimumBid).toLocaleString('en-IN')}
+                    </p>
+                    <div className="mt-auto pt-4 border-t border-gray-200">
+                        <AuctionCardTimer startTime={auction.startTime} endTime={auction.endTime} />
+                        <div className="text-xs text-gray-500 mt-2 space-y-1 text-center">
+                            <p><strong>Starts:</strong> {formatDate(auction.startTime)}</p>
+                            <p><strong>Ends:</strong> {formatDate(auction.endTime)}</p>
+                        </div>
+                    </div>
+                </div>
             </div>
         );
 
+        const AuctionDetailTimer = ({ auction }) => {
+            const [display, setDisplay] = useState({ title: '', countdown: '', color: 'text-gray-800' });
+            
+            const calculateTime = useCallback(() => {
+                const now = new Date();
+                const start = auction.startTime.toDate();
+                const end = auction.endTime.toDate();
+
+                if (now < start) {
+                    const diff = start - now;
+                    const d = String(Math.floor(diff / (1000 * 60 * 60 * 24))).padStart(2,'0');
+                    const h = String(Math.floor((diff / 36e5) % 24)).padStart(2, '0');
+                    const m = String(Math.floor((diff % 36e5) / 6e4)).padStart(2, '0');
+                    const s = String(Math.floor((diff % 6e4) / 1000)).padStart(2, '0');
+                    setDisplay({ title: 'Auction Starts In', countdown: `${d}:${h}:${m}:${s}`, color: 'text-blue-600' });
+                } else if (now >= start && now < end) {
+                    const diff = end - now;
+                    const d = String(Math.floor(diff / (1000 * 60 * 60 * 24))).padStart(2,'0');
+                    const h = String(Math.floor((diff / 36e5) % 24)).padStart(2, '0');
+                    const m = String(Math.floor((diff % 36e5) / 6e4)).padStart(2, '0');
+                    const s = String(Math.floor((diff % 6e4) / 1000)).padStart(2, '0');
+                    setDisplay({ title: 'Time Remaining', countdown: `${d}:${h}:${m}:${s}`, color: 'text-indigo-600' });
+                } else {
+                    setDisplay({ title: 'Auction Status', countdown: 'Closed', color: 'text-red-600' });
+                }
+            }, [auction]);
+
+            useEffect(() => {
+                calculateTime();
+                const interval = setInterval(calculateTime, 1000);
+                return () => clearInterval(interval);
+            }, [calculateTime]);
+
+            return (
+                <div className="text-center mb-4">
+                    <p className={`text-lg font-semibold ${display.color}`}>{display.title}</p>
+                    <p className={`text-5xl font-bold tracking-wider ${display.color}`}>{display.countdown}</p>
+                    <div className="text-sm text-gray-500 mt-3 space-y-1">
+                        <p><strong>Starts:</strong> {formatDate(auction.startTime)}</p>
+                        <p><strong>Ends:</strong> {formatDate(auction.endTime)}</p>
+                    </div>
+                </div>
+            );
+        };
+
         function AuctionDetail({ auctionId, onBack }) {
             const [auction, setAuction] = useState(null);
-            const [currentImageIndex, setCurrentImageIndex] = useState(0);
-            
+            const [bids, setBids] = useState([]);
+            const [mainImage, setMainImage] = useState('');
+            const { user, userData } = useAuth();
+            const [bidAmount, setBidAmount] = useState('');
+            const [error, setError] = useState('');
+
+            const isBiddable = useMemo(() => {
+                if (!auction) return false;
+                const now = new Date();
+                return auction.startTime?.toDate() <= now && auction.endTime?.toDate() > now;
+            }, [auction]);
+
             useEffect(() => {
-                 const unsubAuction = db.collection('auctions').doc(auctionId).onSnapshot(doc => {
+                const unsubAuction = db.collection('auctions').doc(auctionId).onSnapshot(doc => {
                     if (doc.exists) {
-                        setAuction({ id: doc.id, ...doc.data() });
+                        const data = { id: doc.id, ...doc.data() };
+                        setAuction(data);
+                        if (!mainImage) { 
+                           setMainImage(data.imageUrls?.[0] || "https://placehold.co/800x600/e2e8f0/4a5568?text=Item");
+                        }
                     } else { setAuction(null); }
                 });
-                return () => unsubAuction();
-            }, [auctionId]);
+                const unsubBids = db.collection('bids').where('auctionId', '==', auctionId).orderBy('timestamp', 'desc').onSnapshot(snap => {
+                    const bidsData = snap.docs.map(d => d.data());
+                    setBids(bidsData.slice(0, 10));
+                });
+                return () => { unsubAuction(); unsubBids(); };
+            }, [auctionId, mainImage]);
 
-            const nextImage = () => {
-                setCurrentImageIndex(prev => (prev + 1) % auction.imageUrls.length);
-            };
-            const prevImage = () => {
-                setCurrentImageIndex(prev => (prev - 1 + auction.imageUrls.length) % auction.imageUrls.length);
+            const handlePlaceBid = async (e) => {
+                e.preventDefault(); setError('');
+                const newBid = parseFloat(bidAmount);
+                const requiredBid = parseFloat(auction.currentPrice) + parseFloat(auction.bidIncrement || 1000);
+                if (isNaN(newBid) || newBid < requiredBid) { setError(`Bid must be at least ₹${requiredBid.toLocaleString('en-IN')}`); return; }
+                const auctionRef = db.collection('auctions').doc(auctionId);
+                try {
+                    await db.runTransaction(async t => {
+                        const doc = await t.get(auctionRef); const currentData = doc.data();
+                        if (newBid <= currentData.currentPrice) throw new Error("Another user just placed a higher bid! Please try again.");
+                        let updatePayload = { 
+                            currentPrice: newBid, 
+                            highestBidderEmail: user.email, 
+                            highestBidderId: user.uid, 
+                            highestBidderName: userData.firstName + " " + userData.lastName 
+                        };
+                        const endTime = currentData.endTime.toDate();
+                        // Anti-sniping: extend auction by 2 minutes if a bid is placed in the last 2 minutes
+                        if ((endTime.getTime() - Date.now()) <= 120000) { 
+                            updatePayload.endTime = new Date(endTime.getTime() + 120000); 
+                        }
+                        t.update(auctionRef, updatePayload);
+                        t.set(db.collection('bids').doc(), { 
+                            auctionId, 
+                            amount: newBid, 
+                            bidderEmail: user.email, 
+                            bidderName: userData.firstName + " " + userData.lastName, 
+                            timestamp: new Date() 
+                        });
+                    });
+                    setBidAmount('');
+                } catch(err) { setError(err.message); }
             };
 
             if (!auction) return <div className="text-center p-10 font-semibold">Loading auction details...</div>;
             
             return (
-                <div>
-                    <button onClick={onBack} className="mb-6 py-2 px-4 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors">
-                        &larr; Back to Auctions
-                    </button>
-                    <div className="bg-white rounded-xl shadow-2xl p-6 sm:p-8 grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-12">
+    <div>
+        <button
+            onClick={onBack}
+            className="mb-6 py-2 px-4 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
+        >
+            &larr; Back to Auctions
+        </button>
+        <div className="bg-white rounded-xl shadow-2xl p-6 sm:p-8 grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-12">
+            
+            {/* Image Gallery */}
+            <div>
+                <img
+                    src={mainImage}
+                    alt={auction.title}
+                    className="rounded-lg w-full h-96 object-cover shadow-lg mb-4"
+                />
+                <div className="flex space-x-2 overflow-x-auto pb-2">
+                    {auction.imageUrls?.map((img, i) => (
+                        <img
+                            key={i}
+                            src={img}
+                            onClick={() => setMainImage(img)}
+                            className={`h-20 w-20 object-cover rounded-md cursor-pointer border-2 transition-all ${
+                                mainImage === img ? 'border-indigo-500 scale-105' : 'border-transparent hover:border-indigo-300'
+                            }`}
+                        />
+                    ))}
+                </div>
+            </div>
+
+            {/* Auction Details & Bidding */}
+            <div>
+                <h2 className="text-4xl font-bold text-gray-900 mb-2">{auction.title}</h2>
+                <p className="text-gray-600 mb-6">{auction.description}</p>
+                
+                 {/* Timer & Bid Info Box */}
+                <div className="bg-indigo-50 p-6 rounded-lg mb-6 border-2 border-indigo-200">
+                    <AuctionDetailTimer auction={auction} />
+                    <div className="grid grid-cols-2 gap-4 text-center mt-4 border-t border-indigo-200 pt-4">
                         <div>
-                             <div className="relative w-full h-96">
-                                <img
-                                    src={auction.imageUrls?.[currentImageIndex] || "https://placehold.co/800x600/e2e8f0/4a5568?text=Item"}
-                                    alt={auction.title}
-                                    className="rounded-lg w-full h-full object-cover shadow-lg transition-opacity duration-300"
-                                />
-                                {auction.imageUrls?.length > 1 && (
-                                    <>
-                                        <button onClick={prevImage} className="absolute left-2 top-1/2 -translate-y-1/2 bg-black bg-opacity-40 text-white p-2 rounded-full hover:bg-opacity-60 transition">
-                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
-                                        </button>
-                                        <button onClick={nextImage} className="absolute right-2 top-1/2 -translate-y-1/2 bg-black bg-opacity-40 text-white p-2 rounded-full hover:bg-opacity-60 transition">
-                                           <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-                                        </button>
-                                    </>
-                                )}
-                            </div>
-                            <div className="flex space-x-2 overflow-x-auto mt-4 pb-2">
-                                {auction.imageUrls?.map((img, i) => (
-                                    <img
-                                        key={i}
-                                        src={img}
-                                        onClick={() => setCurrentImageIndex(i)}
-                                        className={`h-20 w-20 object-cover rounded-md cursor-pointer border-2 transition-all ${
-                                            currentImageIndex === i ? 'border-indigo-500 scale-105' : 'border-transparent hover:border-indigo-300'
-                                        }`}
-                                    />
+                            <p className="text-sm text-gray-500">Current Highest Bid</p>
+                            <p className="text-3xl font-bold text-gray-800">
+                                ₹{parseFloat(auction.currentPrice).toLocaleString('en-IN')}
+                            </p>
+                        </div>
+                        <div>
+                            <p className="text-sm text-gray-500">Highest Bidder</p>
+                            <p className="text-xl font-semibold text-gray-700 truncate">
+                                {auction.highestBidderName || 'None'}
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Additional Info */}
+                <div className="border-t pt-4 mt-4 space-y-2 text-gray-700">
+                    <p><strong>Minimum Bid:</strong> ₹{parseFloat(auction.minimumBid).toLocaleString('en-IN')}</p>
+                    <p><strong>Bid Increment:</strong> ₹{parseFloat(auction.bidIncrement).toLocaleString('en-IN')}</p>
+                    {auction.amenities && auction.amenities.length > 0 && (
+                        <div>
+                            <strong>Amenities:</strong>
+                            <div className="flex flex-wrap gap-2 mt-1">
+                                {auction.amenities.map((a) => (
+                                    <span key={a} className="bg-gray-200 text-gray-800 text-xs font-semibold mr-2 px-2.5 py-0.5 rounded-full">{a}</span>
                                 ))}
                             </div>
                         </div>
-                        <div>
-                           <h2 className="text-4xl font-bold text-gray-900 mb-2">{auction.title}</h2>
-                           <p className="text-gray-600 mb-6">{auction.description}</p>
-                        </div>
-                    </div>
+                    )}
                 </div>
-            );
+
+                {/* Bidding Form or Closed Message */}
+                {isBiddable ? (
+                    <form onSubmit={handlePlaceBid} className="space-y-4 mt-6">
+                        <h3 className="text-xl font-semibold">Place Your Bid (in Rupees)</h3>
+                        {error && <div className="bg-red-100 text-red-700 p-3 rounded-lg font-medium">{error}</div>}
+                        <div className="flex items-center space-x-2">
+                            <input
+                                type="number"
+                                value={bidAmount}
+                                onChange={(e) => setBidAmount(e.target.value)}
+                                placeholder={`₹${(parseFloat(auction.currentPrice) + parseFloat(auction.bidIncrement)).toLocaleString('en-IN')} or more`}
+                                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none transition"
+                                required
+                            />
+                        </div>
+                        <button type="submit" className="w-full py-3 bg-indigo-600 text-white font-bold rounded-lg hover:bg-indigo-700 transition-all duration-300 transform hover:scale-105">
+                            Place Bid
+                        </button>
+                    </form>
+                ) : (
+                    <div className="text-center text-xl font-bold text-red-600 bg-red-100 p-4 rounded-lg mt-6">
+                        This auction is not currently open for bidding.
+                    </div>
+                )}
+                 
+                 {/* Bid History */}
+                 <div className="mt-8">
+                    <h3 className="text-xl font-semibold mb-2">Recent Bids</h3>
+                     <ul className="space-y-2 max-h-60 overflow-y-auto pr-2 border rounded-lg p-2 bg-gray-50">
+                        {bids.length > 0 ? bids.map((b, i) => (
+                            <li key={i} className={`flex justify-between p-3 rounded-md ${i === 0 ? 'bg-green-100' : 'bg-white'}`}>
+                                <span className="font-medium text-gray-800">
+                                    {i + 1}. {b.bidderName || b.bidderEmail}
+                                </span>
+                                <span className="font-bold text-gray-900">₹{b.amount.toLocaleString('en-IN')}</span>
+                            </li>
+                        )) : <p className="text-gray-500 p-3 text-center">No bids placed yet.</p>}
+                    </ul>
+                 </div>
+            </div>
+        </div>
+    </div>
+);
         }
         
+        // --- 6. ADMIN DASHBOARD & COMPONENTS ---
         function AdminDashboard() {
             const [view, setView] = useState('auctions');
-            const { isGoogleSignedIn, gapiLoaded, signInWithGoogle, signOutFromGoogle } = useAuth();
-
-            return (
-                <div>
-                    <Navbar />
-                    <div className="container mx-auto p-8">
-                        <div className="flex justify-between items-center border-b mb-6">
-                            <div className="flex space-x-4">
-                                <button onClick={() => setView('auctions')} className={`py-2 px-4 text-lg font-semibold ${view === 'auctions' ? 'text-indigo-600 border-b-2 border-indigo-600' : 'text-gray-500'}`}>Manage Auctions</button>
-                                <button onClick={() => setView('users')} className={`py-2 px-4 text-lg font-semibold ${view === 'users' ? 'text-indigo-600 border-b-2 border-indigo-600' : 'text-gray-500'}`}>Manage Users</button>
-                            </div>
-                            {gapiLoaded && (
-                                <div>
-                                    {isGoogleSignedIn ? (
-                                        <button onClick={signOutFromGoogle} className="py-2 px-4 bg-yellow-500 text-white font-semibold rounded-lg hover:bg-yellow-600">Sign Out from Google</button>
-                                    ) : (
-                                        <button onClick={signInWithGoogle} className="py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700">Sign in with Google</button>
-                                    )}
-                                </div>
-                            )}
-                        </div>
-                        {view === 'auctions' ? <ManageAuctions /> : <ManageUsers />}
-                    </div>
-                </div>
-            );
+            return <div><Navbar/><div className="container mx-auto p-8"><div className="flex space-x-4 border-b mb-6"><button onClick={() => setView('auctions')} className={`py-2 px-4 text-lg font-semibold ${view === 'auctions' ? 'text-indigo-600 border-b-2 border-indigo-600' : 'text-gray-500'}`}>Manage Auctions</button><button onClick={() => setView('users')} className={`py-2 px-4 text-lg font-semibold ${view === 'users' ? 'text-indigo-600 border-b-2 border-indigo-600' : 'text-gray-500'}`}>Manage Users</button></div>{view === 'auctions' ? <ManageAuctions /> : <ManageUsers />}</div></div>;
         }
+
+        const getLiveStatus = (auction) => {
+            const now = new Date(); const startTime = auction.startTime?.toDate(); const endTime = auction.endTime?.toDate();
+            if (!startTime || !endTime) return { text: 'Invalid Date', color: 'bg-gray-200 text-gray-800' };
+            if (endTime <= now) return { text: 'Expired', color: 'bg-red-200 text-red-800' };
+            if (startTime > now) return { text: 'Upcoming', color: 'bg-blue-200 text-blue-800' };
+            return { text: 'Live', color: 'bg-green-200 text-green-800' };
+        };
 
         function ManageAuctions() {
             const [auctions, setAuctions] = useState([]);
@@ -555,104 +757,108 @@
             const [editingAuction, setEditingAuction] = useState(null);
             useEffect(() => { const unsub = db.collection('auctions').orderBy('startTime', 'desc').onSnapshot(snap => setAuctions(snap.docs.map(d => ({id: d.id, ...d.data()})))); return () => unsub(); }, []);
             const handleEdit = auction => { setEditingAuction(auction); setShowModal(true); };
-            const handleDelete = id => window.confirm("Are you sure?") && db.collection('auctions').doc(id).delete();
+            const handleDelete = id => window.confirm("Are you sure you want to delete this auction?") && db.collection('auctions').doc(id).delete();
             const handleClose = () => { setShowModal(false); setEditingAuction(null); };
-
             return (
-                 <div>
-                    <button onClick={() => setShowModal(true)} className="mb-6 py-2 px-6 bg-green-600 text-white font-bold rounded-lg hover:bg-green-700 transition-colors">
+                <div>
+                    <button
+                        onClick={() => setShowModal(true)}
+                        className="mb-6 py-2 px-6 bg-green-600 text-white font-bold rounded-lg hover:bg-green-700 transition-colors"
+                    >
                         + Create New Auction
                     </button>
                     {showModal && <AuctionForm auction={editingAuction} onClose={handleClose} />}
                     <div className="bg-white p-6 rounded-lg shadow-md overflow-x-auto">
                         <table className="w-full text-left">
-                            <thead><tr className="border-b bg-gray-50"><th className="p-3">Title</th></tr></thead>
+                            <thead>
+                                <tr className="border-b bg-gray-50">
+                                    <th className="p-3 font-semibold text-gray-600">Title</th>
+                                    <th className="p-3 font-semibold text-gray-600">Status</th>
+                                    <th className="p-3 font-semibold text-gray-600">Highest Bid (₹)</th>
+                                    <th className="p-3 font-semibold text-gray-600">Highest Bidder</th>
+                                    <th className="p-3 font-semibold text-gray-600">Actions</th>
+                                </tr>
+                            </thead>
                             <tbody>
-                                {auctions.map(a => (
-                                    <tr key={a.id} className="border-b hover:bg-gray-50">
-                                        <td className="p-3">{a.title}</td>
-                                        <td className="p-3 space-x-2"><button onClick={() => handleEdit(a)}>Edit</button><button onClick={() => handleDelete(a.id)}>Delete</button></td>
-                                    </tr>
-                                ))}
+                                {auctions.map(a => {
+                                    const liveStatus = getLiveStatus(a);
+                                    return (
+                                        <tr key={a.id} className="border-b hover:bg-gray-50">
+                                            <td className="p-3 truncate" style={{ maxWidth: '200px' }}>{a.title}</td>
+                                            <td className="p-3">
+                                                <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${liveStatus.color}`}>
+                                                    {liveStatus.text}
+                                                </span>
+                                            </td>
+                                            <td className="p-3">{parseFloat(a.currentPrice || 0).toLocaleString('en-IN')}</td>
+                                            <td className="p-3 truncate" style={{ maxWidth: '150px' }}>
+                                                {a.highestBidderName || a.highestBidderEmail || 'N/A'}
+                                            </td>
+                                            <td className="p-3 space-x-2 whitespace-nowrap">
+                                                <button onClick={() => handleEdit(a)} className="text-blue-500 hover:underline">Edit</button>
+                                                <button onClick={() => handleDelete(a.id)} className="text-red-500 hover:underline">Delete</button>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
                             </tbody>
                         </table>
                     </div>
                 </div>
-            )
+            );
         }
 
         function AuctionForm({ auction, onClose }) {
-            const [formData, setFormData] = useState({ title: auction?.title || ''});
+            const [formData, setFormData] = useState({ title: auction?.title || '', description: auction?.description || '', location: auction?.location || '', amenities: auction?.amenities || [''], startTime: auction ? new Date(auction.startTime.seconds * 1000).toISOString().slice(0, 16) : '', endTime: auction ? new Date(auction.endTime.seconds * 1000).toISOString().slice(0, 16) : '', minimumBid: auction?.minimumBid || '', bidIncrement: auction?.bidIncrement || '1000', });
             const [imageFiles, setImageFiles] = useState([]);
             const [existingImageUrls, setExistingImageUrls] = useState(auction?.imageUrls || []);
             const [loading, setLoading] = useState(false);
             const [formError, setFormError] = useState('');
-            const { isGoogleSignedIn, uploadFileToDrive } = useAuth();
+
+            const handleChange = e => {
+                setFormError(''); 
+                setFormData({...formData, [e.target.name]: e.target.value});
+            };
+            const handleAmenityChange = (i, val) => setFormData({...formData, amenities: formData.amenities.map((a, idx) => idx === i ? val : a)});
+            const addAmenity = () => setFormData({...formData, amenities: [...formData.amenities, '']});
+            const removeAmenity = i => setFormData({...formData, amenities: formData.amenities.filter((_, idx) => idx !== i)});
+            const removeExistingImage = url => setExistingImageUrls(existingImageUrls.filter(u => u !== url));
             
             const handleSubmit = async e => {
                 e.preventDefault(); 
                 setFormError('');
-                if(imageFiles.length > 0 && !isGoogleSignedIn) {
-                    setFormError("Please sign in with Google to upload new images.");
-                    return;
-                }
-                setLoading(true); 
-                try {
-                    const uploadPromises = imageFiles.map(file => uploadFileToDrive(file));
-                    const newImageUrls = await Promise.all(uploadPromises);
-                    const finalImageUrls = [...existingImageUrls, ...newImageUrls];
-                    const dataToSave = { ...formData, imageUrls: finalImageUrls };
-                    if(auction) { await db.collection('auctions').doc(auction.id).update(dataToSave); } 
-                    else { await db.collection('auctions').add(dataToSave); }
-                    onClose();
-                } catch (err) {
-                    setFormError(err.message || "An error occurred while saving.");
-                } finally { setLoading(false); }
-            };
-            
-            const removeExistingImage = url => setExistingImageUrls(existingImageUrls.filter(u => u !== url));
-            const handleFileSelect = (e) => setImageFiles(Array.from(e.target.files));
 
-            return (
-                <Modal onClose={onClose} title={auction ? 'Edit Auction' : 'Create Auction'}>
-                    <form onSubmit={handleSubmit} className="space-y-4">
-                        <input name="title" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} placeholder="Title" required className="w-full p-2 border rounded"/>
-                        <div>
-                            <label className="block text-sm font-medium">Auction Images</label>
-                            {!isGoogleSignedIn && <p className="text-sm text-yellow-600 my-1">Sign in with Google to add new images.</p>}
-                            <div className="my-2 flex flex-wrap gap-2">
-                                {existingImageUrls.map((url, i) => (
-                                <div key={i} className="relative">
-                                    <img src={url} className="h-20 w-20 object-cover rounded"/>
-                                    <button type="button" onClick={()=>removeExistingImage(url)} className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full h-6 w-6">&times;</button>
-                                </div>
-                                ))}
-                            </div>
-                            <input type="file" onChange={handleFileSelect} accept="image/*" multiple className="w-full text-sm" disabled={!isGoogleSignedIn}/>
-                        </div>
-                         {formError && <p className="text-red-600">{formError}</p>}
-                        <div className="flex justify-end space-x-4 pt-4 border-t mt-4">
-                            <button type="button" onClick={onClose}>Cancel</button>
-                            <button type="submit" disabled={loading}>{loading ? 'Saving...' : (auction ? 'Update' : 'Create')}</button>
-                        </div>
-                    </form>
-                </Modal>
-            );
+                const startTime = new Date(formData.startTime);
+                const endTime = new Date(formData.endTime);
+                if (!formData.startTime || !formData.endTime || startTime >= endTime) {
+                    setFormError('End time must be after the start time.');
+                    return; 
+                }
+                
+                setLoading(true); 
+                const uploadPromises = imageFiles.map(file => {
+                    const storageRef = storage.ref(`auction-images/${Date.now()}_${file.name}`);
+                    return storageRef.put(file).then(snapshot => snapshot.ref.getDownloadURL());
+                });
+                const newImageUrls = await Promise.all(uploadPromises);
+                const finalImageUrls = [...existingImageUrls, ...newImageUrls];
+                const dataToSave = { ...formData, imageUrls: finalImageUrls, amenities: formData.amenities.filter(a => a), startTime, endTime, minimumBid: parseFloat(formData.minimumBid), bidIncrement: parseFloat(formData.bidIncrement), currentPrice: auction ? parseFloat(auction.currentPrice) : parseFloat(formData.minimumBid) };
+                if(auction) { await db.collection('auctions').doc(auction.id).update(dataToSave); } 
+                else { await db.collection('auctions').add(dataToSave); }
+                setLoading(false); onClose();
+            };
+
+            return <Modal onClose={onClose} title={auction ? 'Edit Auction' : 'Create Auction'}><form onSubmit={handleSubmit} className="space-y-4"><input name="title" value={formData.title} onChange={handleChange} placeholder="Title" required className="w-full p-2 border rounded border-gray-300"/><textarea name="description" value={formData.description} onChange={handleChange} placeholder="Description" required className="w-full p-2 border rounded border-gray-300"/><div><label className="block text-sm font-medium">Auction Images</label><div className="my-2 flex flex-wrap gap-2">{existingImageUrls.map((url, i) => <div key={i} className="relative"><img src={url} className="h-20 w-20 object-cover rounded"/><button type="button" onClick={()=>removeExistingImage(url)} className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full h-6 w-6 flex items-center justify-center font-bold">&times;</button></div>)}</div><input type="file" onChange={e => setImageFiles(Array.from(e.target.files))} accept="image/*" multiple className="w-full text-sm"/></div><input name="location" value={formData.location} onChange={handleChange} placeholder="Location" required className="w-full p-2 border rounded border-gray-300"/><div><label className="block font-semibold">Amenities</label>{formData.amenities.map((a, i) => <div key={i} className="flex items-center space-x-2 mb-2"><input value={a} onChange={e => handleAmenityChange(i, e.target.value)} placeholder="e.g., Free Parking" className="w-full p-2 border rounded border-gray-300"/><button type="button" onClick={() => removeAmenity(i)} className="p-2 bg-red-500 text-white rounded font-bold">&times;</button></div>)}<button type="button" onClick={addAmenity} className="text-sm text-indigo-600 hover:underline">+ Add Amenity</button></div><div className="grid grid-cols-2 gap-4"><label className="font-semibold">Start Time</label><label className="font-semibold">End Time</label><input type="datetime-local" name="startTime" value={formData.startTime} onChange={handleChange} required className="w-full p-2 border rounded border-gray-300" title="Start Time"/><input type="datetime-local" name="endTime" value={formData.endTime} onChange={handleChange} required className="w-full p-2 border rounded border-gray-300" title="End Time"/></div>{formError && <p className="text-red-600 text-center text-sm">{formError}</p>} <div className="grid grid-cols-2 gap-4"><input type="number" name="minimumBid" value={formData.minimumBid} onChange={handleChange} placeholder="Minimum Bid (₹)" required step="1" className="w-full p-2 border rounded border-gray-300"/><input type="number" name="bidIncrement" value={formData.bidIncrement} onChange={handleChange} placeholder="Bid Increment (₹)" required step="1" className="w-full p-2 border rounded border-gray-300"/></div><div className="flex justify-end space-x-4 pt-4 border-t mt-4"><button type="button" onClick={onClose} className="py-2 px-4 bg-gray-500 text-white rounded-lg hover:bg-gray-600">Cancel</button><button type="submit" disabled={loading} className="py-2 px-4 bg-indigo-600 text-white rounded-lg disabled:bg-gray-400 hover:bg-indigo-700">{loading ? 'Saving...' : (auction ? 'Update' : 'Create')}</button></div></form></Modal>;
         }
 
         function ManageUsers() {
             const [users, setUsers] = useState([]);
             useEffect(() => { const unsub = db.collection('users').onSnapshot(snap => setUsers(snap.docs.map(d => ({id: d.id, ...d.data()})))); return () => unsub(); }, []);
-            return (
-                <div className="bg-white p-6 rounded-lg shadow-md overflow-x-auto">
-                    <table className="w-full text-left">
-                        <thead><tr><th>Email</th><th>Name</th></tr></thead>
-                        <tbody>{users.map(u => <tr key={u.id}><td className="p-2">{u.email}</td><td className="p-2">{u.firstName} {u.lastName}</td></tr>)}</tbody>
-                    </table>
-                </div>
-            )
+            const handleRoleChange = async (user, isAdmin) => { if (window.confirm(`Are you sure you want to ${isAdmin ? 'promote' : 'demote'} ${user.email}?`)) { await db.collection('users').doc(user.id).update({ isAdmin }); } };
+            return <div className="bg-white p-6 rounded-lg shadow-md overflow-x-auto"><p className="text-sm text-gray-600 mb-4">Note: Admins can manage roles here. To add new users, use the Firebase Authentication console, then manage their roles on this screen.</p><table className="w-full text-left"><thead><tr className="border-b bg-gray-50"><th className="p-3 font-semibold text-gray-600">Email</th><th className="p-3 font-semibold text-gray-600">Name</th><th className="p-3 font-semibold text-gray-600">Role</th><th className="p-3 font-semibold text-gray-600">Actions</th></tr></thead><tbody>{users.map(u => <tr key={u.id} className="border-b hover:bg-gray-50"><td className="p-3">{u.email}</td><td className="p-3">{u.firstName} {u.lastName}</td><td className="p-3 font-medium">{u.isAdmin ? <span className="text-green-600">Admin</span> : <span className="text-gray-600">User</span>}</td><td className="p-3"><button onClick={() => handleRoleChange(u, !u.isAdmin)} className={`text-sm py-1 px-3 rounded text-white transition-colors ${u.isAdmin ? 'bg-yellow-500 hover:bg-yellow-600' : 'bg-blue-500 hover:bg-blue-600'}`}>{u.isAdmin ? 'Demote to User' : 'Promote to Admin'}</button></td></tr>)}</tbody></table></div>;
         }
 
+        // --- 7. RENDER THE APP ---
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<AuthProvider><App /></AuthProvider>);
 
